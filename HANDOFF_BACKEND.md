@@ -38,21 +38,34 @@ Without this, anonymous signup can fail with duplicate key errors on `users_pkey
 ## Credits
 - **Server is source of truth.** Do not treat local balance as authoritative.
 - New users have **0 credits**.
-- Credits are spent by `generate-image` and granted by verified purchases/renewals.
+- Weekly and annual subscribers receive a 200-credit allowance that resets weekly.
+- Unused subscription allowance expires at reset.
+- Purchased credit packs are permanent and never expire.
+- Spend subscription allowance before permanent credits.
+- Photo generation costs 10 credits; video generation costs 20 credits once available.
+- Subscription expiry stops future allowance resets but preserves purchased credits.
 - After generation or purchase, refresh from DB (`from("users").select()`).
+
+The local migration in `supabase/migrations` implements this contract. It still
+needs to be applied to the deployed project and wired into the deployed Edge
+Functions.
 
 ## Generate flow
 1. Ensure signed in.
 2. Call `generate-image` with `{ prompt, inputImageBase64?, templateId? }`.
-3. On 200: append creation + refresh credits.
-4. On 402: route to paywall.
-5. On 500: show error; no charge.
+3. The function calls `spend_generation_credits(user_id, 'photo')` only after a
+   successful provider result. The RPC charges 10 credits under a row lock.
+4. On 200: append creation + refresh credits.
+5. On 402: route to paywall.
+6. On 500: show error; no charge.
 
 ## Purchase flow
 1. Ensure signed in.
 2. StoreKit 2 purchase → get signed transaction JWS.
 3. Call `verify-purchase` with `{ jws }`.
-4. On `{ ok: true, granted }`: refresh credits.
+4. The function passes the verified transaction fields to
+   `apply_verified_apple_purchase(...)`.
+5. On `{ ok: true, granted }`: refresh credits.
 
 ### Current app SKUs
 - Consumables:
@@ -94,6 +107,11 @@ Implement:
 
 ## Known gaps
 - Renewal webhook flow is not fully implemented yet.
+- The local credit migration has not been deployed because this checkout has no
+  Supabase access token or linked project credentials.
+- The deployed `verify-purchase` and `generate-image` sources are not present in
+  this checkout; download them, replace their legacy credit mutation with the
+  migration RPCs, then deploy them.
 - `speed`/`mode` are ignored by generation (default `fast`/`auto`).
 - Video generation not implemented.
 

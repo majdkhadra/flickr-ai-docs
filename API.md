@@ -20,7 +20,7 @@ How the iOS app talks to the Supabase backend.
 ## Edge Functions (call via `functions.invoke`)
 
 ### `POST /functions/v1/generate-image`
-Generate an image from a prompt (optionally editing a supplied photo). Charges 1 credit on success only.
+Generate an image from a prompt (optionally editing a supplied photo). Charges 10 credits on success only.
 
 **Request body**
 | Field | Type | Required | Notes |
@@ -35,7 +35,7 @@ Generate an image from a prompt (optionally editing a supplied photo). Charges 1
   "id": "uuid",
   "prompt": "string",
   "output_image_url": "https://.../creations/<uid>/<file>.png",
-  "credits_cost": 1,
+  "credits_cost": 10,
   "created_at": "ISO8601"
 }}
 ```
@@ -113,11 +113,36 @@ from("users").select()
 ```
 Returns the current user's profile row. The app currently decodes:
 
-- `credits` → current credit balance.
-- `resets` → optional account reset count/allowance, if the backend exposes it.
-- `permanent_credits` → optional permanent-credit balance, if the backend exposes it.
+- `credits` → compatibility total (`weekly_credits + permanent_credits`).
+- `weekly_credits` → expiring subscription allowance.
+- `permanent_credits` → purchased credits that never expire.
+- `weekly_credits_reset_at` → next allowance reset time.
+- `subscription_expires_at` → verified entitlement expiration.
 
 Use the first row. Refresh after each generation and after a purchase.
+
+### Approved production credit contract
+
+- Active weekly and annual subscriptions receive a **200-credit weekly allowance**.
+- Unused subscription allowance expires when the weekly allowance resets.
+- Purchased 300 / 600 / 900 credit packs are permanent and never expire.
+- Spend subscription allowance before permanent credits.
+- Photo generation costs 10 credits.
+- Video generation costs 20 credits once video generation is implemented.
+- Subscription expiry stops future allowance resets but does not remove purchased credits.
+
+The migration in `supabase/migrations` stores the weekly allowance separately
+from permanent credits. Deploy it before updating the Edge Functions.
+
+Before an account read, the app calls `refresh_my_weekly_allowance()` to expire
+or refresh the weekly bucket. The call is safe to repeat and can only affect the
+signed-in user's row.
+
+`verify-purchase` must pass each verified Apple transaction to
+`apply_verified_apple_purchase(...)`. `generate-image` must call
+`spend_generation_credits(user_id, 'photo')` inside its successful generation
+path. Both RPCs are restricted to `service_role` and process transactions under
+a row lock.
 
 ### Past creations (Creations screen)
 ```
@@ -132,6 +157,7 @@ Returns the user's creations, newest first. Each row matches the `creation` shap
   - weekly trial: 3 days free, then `$7.99/week`
   - annual: `$59.99/year`
 - In-app credit top-up paywall continues to use consumable packs.
-- New users start at **0 credits**. Credits come from verified purchases/subscription grants.
+- New users start at **0 credits**. Credits come from verified purchases or the
+  active subscription's weekly allowance.
 - `speed`/`mode` are not yet honored by generation (default `fast`/`auto`).
 - Video generation: not available.
